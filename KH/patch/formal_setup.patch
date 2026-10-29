@@ -1,0 +1,174 @@
+From eb01c9b46cc3ca90d40033119f35cb2dbdeb71a8 Mon Sep 17 00:00:00 2001
+From: Niels Hartmann <niels@syosil.com>
+Date: Mon, 19 Jan 2026 14:18:16 +0100
+Subject: [PATCH] Bug fixes for formal verification
+
+---
+ build.sbt                                         |  4 ++--
+ src/main/scala/core/Core.scala                    |  1 +
+ src/main/scala/core/modules/HazardDetection.scala |  7 +++++++
+ src/main/scala/core/stages/Fetch.scala            | 11 ++++++++---
+ src/main/scala/core/stages/Memory.scala           |  4 ++--
+ src/main/scala/core/stages/Writeback.scala        |  8 +++++---
+ 6 files changed, 25 insertions(+), 10 deletions(-)
+
+diff --git a/src/main/scala/core/Core.scala b/src/main/scala/core/Core.scala
+index aee6f91..fe00fc3 100644
+--- a/src/main/scala/core/Core.scala
++++ b/src/main/scala/core/Core.scala
+@@ -52,6 +52,7 @@ class Core(implicit conf: Config) extends Module {
+   hazard.io.ID <> decode.io.hzd
+   hazard.io.EX <> execute.io.hzd
+   hazard.io.MEM <> memory.io.hzd
++  hazard.io.WB <> writeback.io.hzd
+   hazard.io.CSR <> csr.io.hzd
+
+   //CSR TRIGGERS
+diff --git a/src/main/scala/core/modules/HazardDetection.scala b/src/main/scala/core/modules/HazardDetection.scala
+index d7026dc..8ae15ea 100644
+--- a/src/main/scala/core/modules/HazardDetection.scala
++++ b/src/main/scala/core/modules/HazardDetection.scala
+@@ -28,6 +28,10 @@ class MemoryHazardIO extends Bundle {
+   val stall = Input(Bool())
+ }
+
++class WritebackHazardIO extends Bundle {
++  val stall = Input(Bool())
++}
++
+ class CSRHazardIO extends Bundle {
+   val stall = Input(Bool())
+   val valid = Output(Bool())
+@@ -41,6 +45,7 @@ class HazardDetection extends Module {
+     val ID = Flipped(new DecodeHazardIO)
+     val EX = Flipped(new ExecuteHazardIO)
+     val MEM = Flipped(new MemoryHazardIO)
++    val WB = Flipped(new WritebackHazardIO)
+     val CSR = Flipped(new CSRHazardIO)
+   })
+   //All outputs default to false
+@@ -50,6 +55,7 @@ class HazardDetection extends Module {
+   io.ID.stall :=  false.B
+   io.EX.stall :=  false.B
+   io.MEM.stall := false.B
++  io.WB.stall := false.B
+   io.CSR.stall := false.B
+
+   //Delayed memory response
+@@ -60,6 +66,7 @@ class HazardDetection extends Module {
+     io.ID.stall := true.B
+     io.EX.stall := true.B
+     io.MEM.stall := true.B
++    io.WB.stall := true.B
+   }
+
+   //Load-use hazard
+diff --git a/src/main/scala/core/stages/Fetch.scala b/src/main/scala/core/stages/Fetch.scala
+index 75ed40d..a236882 100644
+--- a/src/main/scala/core/stages/Fetch.scala
++++ b/src/main/scala/core/stages/Fetch.scala
+@@ -23,6 +23,7 @@ class Fetch(implicit conf: Config) extends PipelineStage {
+   /** Program counter */
+   val PC = RegEnable(PCnext, mkPos(conf.pcReset).U(conf.XLEN.W), updatePC) //may also need !io.hzd.stall for multi-cycle stalls?
+   /** Memory request signal */
++
+   val req = WireDefault(true.B)
+
+   //HANDLE LOAD PC WHILE WAITING ON ACK
+@@ -47,6 +48,10 @@ class Fetch(implicit conf: Config) extends PipelineStage {
+     hasSampledInstr := false.B
+   }
+
++  // If a sampled instruction is present, dont request new
++  // instruction from memory
++  req := !hasSampledInstr
++
+   //Next PC logic
+   PCnext := MuxCase(PC + 4.U, Seq(
+     (io.ctrl.loadPC && io.mem.resp.ack, io.ctrl.newPC),
+@@ -56,7 +61,7 @@ class Fetch(implicit conf: Config) extends PipelineStage {
+   //OUTPUT LOGIC
+   //When acknowledged, issue a request for next instruction
+   //When sampled instruction is stored while stalled, this also represents that we wish to pre-load next instruction
+-  val addr = Mux(io.mem.resp.ack || hasSampledInstr, PCnext, PC)
++  val addr = Mux(io.ctrl.loadPC, io.ctrl.newPC, PC)
+   io.id.instr := Mux(hasSampledInstr, sampledInstr, io.mem.resp.rdata)
+
+   //updatePC has some logic in common with io.id.valid, but controls when to register new value of PC.
+@@ -67,7 +72,7 @@ class Fetch(implicit conf: Config) extends PipelineStage {
+   //Does not follow addr exactly, since addr is allowed to increment if ack arrives while stalled.
+   //In that case, PC value to ID stage should still be kept constant
+   //Since IF->ID takes at least two clock cycles (one to req, one to ack), value of PC sent to ID stage is delayed by one CC.
+-  io.id.pc := RegNext(Mux(io.hzd.stall, PC, addr))
++  io.id.pc := PC
+   io.mem.req.addr := addr
+   io.mem.req.req := req
+
+@@ -75,4 +80,4 @@ class Fetch(implicit conf: Config) extends PipelineStage {
+   io.mem.req.wdata := 0.U
+   io.mem.req.we := false.B
+   io.mem.req.wmask := 0.U
+-}
+\ No newline at end of file
++}
+diff --git a/src/main/scala/core/stages/Memory.scala b/src/main/scala/core/stages/Memory.scala
+index 869bc9b..2351466 100644
+--- a/src/main/scala/core/stages/Memory.scala
++++ b/src/main/scala/core/stages/Memory.scala
+@@ -60,10 +60,10 @@ class Memory(implicit conf: Config) extends PipelineStage {
+   //Forwarding outputs
+   io.fwd.rd := ex.rd
+   io.fwd.we := ex.ctrl.we
+-  io.fwd.wdata := ex.res
++  io.fwd.wdata := Mux(ex.ctrl.memRead, rdata, ex.res)
+
+   //Control signals
+   io.hzd.memOp := (ex.ctrl.memWrite || ex.ctrl.memRead) && ex.valid
+   io.hzd.ack := io.mem.ack
+   io.hzd.valid := ex.valid
+-}
+\ No newline at end of file
++}
+diff --git a/src/main/scala/core/stages/Writeback.scala b/src/main/scala/core/stages/Writeback.scala
+index c635b72..a3c3e1e 100644
+--- a/src/main/scala/core/stages/Writeback.scala
++++ b/src/main/scala/core/stages/Writeback.scala
+@@ -3,6 +3,7 @@ package core.stages
+ import chisel3._
+ import chisel3.util.{MuxCase, RegEnable}
+ import core.{Config, ForwardingPort, WritebackInputs}
++import core.modules.{WritebackHazardIO}
+
+ class Writeback(implicit conf: Config) extends PipelineStage {
+   val io = IO(new Bundle {
+@@ -10,9 +11,10 @@ class Writeback(implicit conf: Config) extends PipelineStage {
+     val csr = Input(new WritebackInputs)
+     val out = Output(new ForwardingPort())
+     val instret = Output(Bool())
++    val hzd = new WritebackHazardIO
+   })
+
+-  val mem = RegEnable(io.mem, 0.U(io.mem.getWidth.W).asTypeOf(io.mem), true.B)
++  val mem = RegEnable(io.mem, 0.U(io.mem.getWidth.W).asTypeOf(io.mem), !io.hzd.stall)
+   val csr = RegEnable(io.csr, 0.U(io.csr.getWidth.W).asTypeOf(io.csr), true.B)
+
+   //Defaults: connect memory subsystem
+@@ -23,7 +25,7 @@ class Writeback(implicit conf: Config) extends PipelineStage {
+   //Change output selection based on active input
+   when(mem.valid) {
+     io.out.we := mem.we
+-    io.out.wdata := mem.res
++    io.out.wdata := Mux(mem.rd === 0.U, 0.U(32.W), mem.res)
+     io.out.rd := mem.rd
+   } .elsewhen(csr.valid) {
+     io.out.we := csr.we
+@@ -31,5 +33,5 @@ class Writeback(implicit conf: Config) extends PipelineStage {
+     io.out.rd := csr.rd
+   }
+
+-  io.instret := mem.valid | csr.valid
++  io.instret := ( mem.valid | csr.valid ) && !io.hzd.stall
+ }
+--
+2.51.1
+

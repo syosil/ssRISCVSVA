@@ -1,0 +1,14 @@
+=========================================================================
+==  NOTICE file corresponding to section 4(d) of the Apache License,   ==
+==  Version 2.0, in this case for the Apache Geronimo distribution.    ==
+=========================================================================
+
+=========================================================================
+==  ssRISCVSVA SyoSil ApS Notice                                       ==
+=========================================================================
+
+All of ssRISCSVA were developed by SyoSil ApS, supported by the Rigoletto
+project. See: https://rigoletto-project.eu for more information.
+
+Copyright (c) 2026 SyoSil ApS
+All rights reserved.

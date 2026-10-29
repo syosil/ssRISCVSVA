@@ -1,0 +1,59 @@
+From 0486d9e9e3521544c4c52ba9d09e7babd0182b3e Mon Sep 17 00:00:00 2001
+From: Niels Hartmann <niels@syosil.com>
+Date: Wed, 19 Nov 2025 10:27:07 +0100
+Subject: [PATCH 1/2] Setup KH core for server
+
+---
+ build.sbt                         | 6 +++---
+ src/test/scala/core/package.scala | 6 +-----
+ 2 files changed, 4 insertions(+), 8 deletions(-)
+
+diff --git a/build.sbt b/build.sbt
+index 1bf21ce..6ee8ce1 100644
+--- a/build.sbt
++++ b/build.sbt
+@@ -4,21 +4,21 @@ ThisBuild / scalaVersion     := "2.13.7"
+ ThisBuild / version          := "0.1.0"
+ ThisBuild / organization     := "Kasper Hesse"
+ 
+-val chiselVersion = "5.0.0"
++val chiselVersion = "6.0.0"
+ 
+ lazy val root = (project in file("."))
+   .settings(
+     name := "Risc-V Core",
+     libraryDependencies ++= Seq(
+       "org.chipsalliance" %% "chisel" % chiselVersion,
+-      "edu.berkeley.cs" %% "chiseltest" % "5.0.0" % "test"
++      "edu.berkeley.cs" %% "chiseltest" % "6.0.0" % "test"
+     ),
+     scalacOptions ++= Seq(
+       "-language:reflectiveCalls",
+       "-deprecation",
+       "-feature",
+       "-Xcheckinit",
++      "-Ymacro-annotations",
+     ),
+     addCompilerPlugin("org.chipsalliance" % "chisel-plugin" % chiselVersion cross CrossVersion.full),
+   )
+-
+diff --git a/src/test/scala/core/package.scala b/src/test/scala/core/package.scala
+index c4cf58d..7aba7cf 100644
+--- a/src/test/scala/core/package.scala
++++ b/src/test/scala/core/package.scala
+@@ -31,11 +31,7 @@ package object core {
+     //Compile and extract .text-segment
+     val gccOpts = s"-nostdlib -nostartfiles -march=rv32i -mabi=ilp32 -c $file.s -o $file.o"
+     val objcopyOpts = s"-O binary $file.o $file.bin"
+-    val (gcc, objcopy) = if (System.getProperty("os.name").contains("Windows")) {
+-      ("riscv64-unknown-elf-gcc.exe", "riscv64-unknown-elf-objcopy.exe")
+-    } else {
+-      ("riscv64-linux-gnu-gcc", "riscv64-linux-gnu-objcopy")
+-    }
++    val (gcc, objcopy) = ("riscv64-unknown-elf-gcc", "riscv64-unknown-elf-objcopy")
+     s"$gcc $gccOpts".!
+     s"$objcopy $objcopyOpts".!
+ 
+-- 
+2.51.1
+
